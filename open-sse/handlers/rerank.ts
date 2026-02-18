@@ -1,3 +1,4 @@
+import { getCorsOrigin } from "../utils/cors.ts";
 /**
  * Rerank Handler
  *
@@ -129,7 +130,7 @@ export async function handleRerank({
     const result = transformResponseFromProvider(providerConfig, data);
 
     return Response.json(result, {
-      headers: { "Access-Control-Allow-Origin": "*" },
+      headers: { "Access-Control-Allow-Origin": getCorsOrigin() },
     });
   } catch (err) {
     return errorResponse(500, `Rerank request failed: ${err.message}`);

@@ -15,7 +15,7 @@
  *   export function OPTIONS() { return handleCorsOptions(); }
  */
 
-const CORS_ORIGIN = process.env.CORS_ORIGIN || "*";
+export const CORS_ORIGIN = process.env.CORS_ORIGIN || "*";
 
 /**
  * Standard CORS headers to spread into any Response.

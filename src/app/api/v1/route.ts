@@ -1,8 +1,4 @@
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, OPTIONS",
-  "Access-Control-Allow-Headers": "*",
-};
+import { CORS_HEADERS } from "@/shared/utils/cors";
 
 /**
  * Handle CORS preflight

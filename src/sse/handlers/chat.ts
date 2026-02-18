@@ -212,9 +212,9 @@ export async function handleChat(request: any, clientRawRequest: any = null) {
 /**
  * Handle single model chat request
  *
- * Refactored (T-28): model resolution, logging, and param building
- * extracted to chatHelpers.js. This function now focuses on the
- * credential retry loop.
+ * Refactored: model resolution, logging, pipeline gates, and chat execution
+ * extracted to focused helpers. This function orchestrates the credential
+ * retry loop.
  */
 async function handleSingleModelChat(
   body: any,
@@ -225,62 +225,26 @@ async function handleSingleModelChat(
   apiKeyInfo: any = null,
   telemetry: any = null
 ) {
-  // 1. Resolve model → provider/model (or return error)
-  const modelInfo = await getModelInfo(modelStr);
-  if (!modelInfo.provider) {
-    if ((modelInfo as any).errorType === "ambiguous_model") {
-      const message =
-        (modelInfo as any).errorMessage ||
-        `Ambiguous model '${modelStr}'. Use provider/model prefix (ex: gh/${modelStr} or cc/${modelStr}).`;
-      log.warn("CHAT", message, {
-        model: modelStr,
-        candidates: (modelInfo as any).candidateAliases || (modelInfo as any).candidateProviders || [],
-      });
-      return errorResponse(HTTP_STATUS.BAD_REQUEST, message);
-    }
-    log.warn("CHAT", "Invalid model format", { model: modelStr });
-    return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid model format");
-  }
+  // 1. Resolve model → provider/model
+  const resolved = await resolveModelOrError(modelStr, body);
+  if (resolved.error) return resolved.error;
 
-  const { provider, model } = modelInfo;
-  const sourceFormat = detectFormat(body);
-  const providerAlias = PROVIDER_ID_TO_ALIAS[provider] || provider;
-  const targetFormat = getModelTargetFormat(providerAlias, model) || getTargetFormat(provider);
+  const { provider, model, sourceFormat, targetFormat } = resolved;
 
-  if (modelStr !== `${provider}/${model}`) {
-    log.info("ROUTING", `${modelStr} → ${provider}/${model}`);
-  } else {
-    log.info("ROUTING", `Provider: ${provider}, Model: ${model}`);
-  }
+  // 2. Pipeline gates (availability + circuit breaker)
+  const gate = checkPipelineGates(provider, model);
+  if (gate) return gate;
 
-  // Pipeline: Check model availability (TTL cooldown)
-  if (!isModelAvailable(provider, model)) {
-    log.warn("AVAILABILITY", `${provider}/${model} is in cooldown, rejecting request`);
-    return (unavailableResponse as any)(
-      HTTP_STATUS.SERVICE_UNAVAILABLE,
-      `Model ${provider}/${model} is temporarily unavailable (cooldown)`,
-      30
-    );
-  }
-
-  // Pipeline: Check circuit breaker for this provider
   const breaker = getCircuitBreaker(provider, {
     failureThreshold: 5,
     resetTimeout: 30000,
-    onStateChange: (name: string, from: string, to: string) => log.info("CIRCUIT", `${name}: ${from} → ${to}`),
+    onStateChange: (name: string, from: string, to: string) =>
+      log.info("CIRCUIT", `${name}: ${from} → ${to}`),
   });
-  if (!breaker.canExecute()) {
-    log.warn("CIRCUIT", `Circuit breaker OPEN for ${provider}, rejecting request`);
-    return (unavailableResponse as any)(
-      HTTP_STATUS.SERVICE_UNAVAILABLE,
-      `Provider ${provider} circuit breaker is open`,
-      30
-    );
-  }
 
   const userAgent = request?.headers?.get("user-agent") || "";
 
-  // 2. Credential retry loop
+  // 3. Credential retry loop
   let excludeConnectionId = null;
   let lastError = null;
   let lastStatus = null;
@@ -288,7 +252,6 @@ async function handleSingleModelChat(
   while (true) {
     const credentials = await getProviderCredentials(provider, excludeConnectionId);
 
-    // All accounts unavailable — return error
     if (!credentials || credentials.allRateLimited) {
       return handleNoCredentials(
         credentials,
@@ -307,63 +270,27 @@ async function handleSingleModelChat(
     const proxyInfo = await safeResolveProxy(credentials.connectionId);
     const proxyStartTime = Date.now();
 
-    // 3. Execute chat via core (with circuit breaker)
+    // 4. Execute chat via core (with circuit breaker + optional TLS)
     if (telemetry) telemetry.startPhase("connect");
-    let result;
-    let tlsFingerprintUsed = false;
-    try {
-      const chatFn = () =>
-        runWithProxyContext(proxyInfo?.proxy || null, () =>
-          (handleChatCore as any)({
-            body: { ...body, model: `${provider}/${model}` },
-            modelInfo: { provider, model },
-            credentials: refreshedCredentials,
-            log,
-            clientRawRequest,
-            connectionId: credentials.connectionId,
-            apiKeyInfo,
-            userAgent,
-            comboName,
-            onCredentialsRefreshed: async (newCreds: any) => {
-              await updateProviderCredentials(credentials.connectionId, {
-                accessToken: newCreds.accessToken,
-                refreshToken: newCreds.refreshToken,
-                providerSpecificData: newCreds.providerSpecificData,
-                testStatus: "active",
-              });
-            },
-            onRequestSuccess: async () => {
-              await clearAccountError(credentials.connectionId, credentials);
-            },
-          })
-        );
-
-      // Wrap with TLS tracking when no proxy and TLS fingerprint is active
-      if (!proxyInfo?.proxy && isTlsFingerprintActive()) {
-        const tracked = await breaker.execute(async () => {
-          return await runWithTlsTracking(chatFn);
-        });
-        result = tracked.result;
-        tlsFingerprintUsed = tracked.tlsFingerprintUsed;
-      } else {
-        result = await breaker.execute(chatFn);
-      }
-    } catch (cbErr) {
-      if (cbErr instanceof CircuitBreakerOpenError) {
-        log.warn("CIRCUIT", `${provider} circuit open during retry: ${cbErr.message}`);
-        return (unavailableResponse as any)(
-          HTTP_STATUS.SERVICE_UNAVAILABLE,
-          `Provider ${provider} circuit breaker is open`,
-          Math.ceil(cbErr.retryAfterMs / 1000)
-        );
-      }
-      throw cbErr;
-    }
+    const { result, tlsFingerprintUsed } = await executeChatWithBreaker({
+      breaker,
+      body,
+      provider,
+      model,
+      refreshedCredentials,
+      proxyInfo,
+      log,
+      clientRawRequest,
+      credentials,
+      apiKeyInfo,
+      userAgent,
+      comboName,
+    });
     if (telemetry) telemetry.endPhase();
 
     const proxyLatency = Date.now() - proxyStartTime;
 
-    // 4. Log proxy + translation events (fire-and-forget)
+    // 5. Log proxy + translation events
     safeLogEvents({
       result,
       proxyInfo,
@@ -379,21 +306,13 @@ async function handleSingleModelChat(
     });
 
     if (result.success) {
-      // Pipeline: Record cost on success
-      if (apiKeyInfo?.id) {
-        try {
-          const usage = result.usage || {};
-          const estimatedCost =
-            ((usage.prompt_tokens || 0) + (usage.completion_tokens || 0)) * 0.000001; // rough estimate
-          if (estimatedCost > 0) recordCost(apiKeyInfo.id, estimatedCost);
-        } catch {}
-      }
+      recordCostIfNeeded(apiKeyInfo, result);
       if (telemetry) telemetry.startPhase("finalize");
       if (telemetry) telemetry.endPhase();
       return result.response;
     }
 
-    // Pipeline: Mark model unavailable on repeated failures (429, 503)
+    // Pipeline: Mark model unavailable on repeated failures
     if (result.status === 429 || result.status === 503) {
       setModelUnavailable(provider, model, 60000, `HTTP ${result.status}`);
       log.info(
@@ -402,7 +321,7 @@ async function handleSingleModelChat(
       );
     }
 
-    // 5. Fallback to next account
+    // 6. Fallback to next account
     const { shouldFallback } = await markAccountUnavailable(
       credentials.connectionId,
       result.status,
@@ -420,6 +339,162 @@ async function handleSingleModelChat(
 
     return result.response;
   }
+}
+
+// ──── Pipeline gate checks ────
+
+/**
+ * Resolve model string to provider/model info, or return an error response.
+ */
+async function resolveModelOrError(modelStr: string, body: any) {
+  const modelInfo = await getModelInfo(modelStr);
+  if (!modelInfo.provider) {
+    if ((modelInfo as any).errorType === "ambiguous_model") {
+      const message =
+        (modelInfo as any).errorMessage ||
+        `Ambiguous model '${modelStr}'. Use provider/model prefix (ex: gh/${modelStr} or cc/${modelStr}).`;
+      log.warn("CHAT", message, {
+        model: modelStr,
+        candidates:
+          (modelInfo as any).candidateAliases || (modelInfo as any).candidateProviders || [],
+      });
+      return { error: errorResponse(HTTP_STATUS.BAD_REQUEST, message) };
+    }
+    log.warn("CHAT", "Invalid model format", { model: modelStr });
+    return { error: errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid model format") };
+  }
+
+  const { provider, model } = modelInfo;
+  const sourceFormat = detectFormat(body);
+  const providerAlias = PROVIDER_ID_TO_ALIAS[provider] || provider;
+  const targetFormat = getModelTargetFormat(providerAlias, model) || getTargetFormat(provider);
+
+  if (modelStr !== `${provider}/${model}`) {
+    log.info("ROUTING", `${modelStr} → ${provider}/${model}`);
+  } else {
+    log.info("ROUTING", `Provider: ${provider}, Model: ${model}`);
+  }
+
+  return { provider, model, sourceFormat, targetFormat };
+}
+
+/**
+ * Check pipeline gates: model availability + circuit breaker state.
+ * Returns an error Response if blocked, or null if OK to proceed.
+ */
+function checkPipelineGates(provider: string, model: string) {
+  if (!isModelAvailable(provider, model)) {
+    log.warn("AVAILABILITY", `${provider}/${model} is in cooldown, rejecting request`);
+    return (unavailableResponse as any)(
+      HTTP_STATUS.SERVICE_UNAVAILABLE,
+      `Model ${provider}/${model} is temporarily unavailable (cooldown)`,
+      30
+    );
+  }
+
+  const breaker = getCircuitBreaker(provider, {
+    failureThreshold: 5,
+    resetTimeout: 30000,
+    onStateChange: (name: string, from: string, to: string) =>
+      log.info("CIRCUIT", `${name}: ${from} → ${to}`),
+  });
+  if (!breaker.canExecute()) {
+    log.warn("CIRCUIT", `Circuit breaker OPEN for ${provider}, rejecting request`);
+    return (unavailableResponse as any)(
+      HTTP_STATUS.SERVICE_UNAVAILABLE,
+      `Provider ${provider} circuit breaker is open`,
+      30
+    );
+  }
+
+  return null;
+}
+
+// ──── Chat execution with circuit breaker ────
+
+/**
+ * Execute chat core wrapped in circuit breaker + optional TLS tracking.
+ */
+async function executeChatWithBreaker({
+  breaker,
+  body,
+  provider,
+  model,
+  refreshedCredentials,
+  proxyInfo,
+  log: logger,
+  clientRawRequest,
+  credentials,
+  apiKeyInfo,
+  userAgent,
+  comboName,
+}: any): Promise<{ result: any; tlsFingerprintUsed: boolean }> {
+  let tlsFingerprintUsed = false;
+
+  try {
+    const chatFn = () =>
+      runWithProxyContext(proxyInfo?.proxy || null, () =>
+        (handleChatCore as any)({
+          body: { ...body, model: `${provider}/${model}` },
+          modelInfo: { provider, model },
+          credentials: refreshedCredentials,
+          log: logger,
+          clientRawRequest,
+          connectionId: credentials.connectionId,
+          apiKeyInfo,
+          userAgent,
+          comboName,
+          onCredentialsRefreshed: async (newCreds: any) => {
+            await updateProviderCredentials(credentials.connectionId, {
+              accessToken: newCreds.accessToken,
+              refreshToken: newCreds.refreshToken,
+              providerSpecificData: newCreds.providerSpecificData,
+              testStatus: "active",
+            });
+          },
+          onRequestSuccess: async () => {
+            await clearAccountError(credentials.connectionId, credentials);
+          },
+        })
+      );
+
+    if (!proxyInfo?.proxy && isTlsFingerprintActive()) {
+      const tracked = await breaker.execute(async () => runWithTlsTracking(chatFn));
+      return { result: tracked.result, tlsFingerprintUsed: tracked.tlsFingerprintUsed };
+    }
+
+    const result = await breaker.execute(chatFn);
+    return { result, tlsFingerprintUsed: false };
+  } catch (cbErr) {
+    if (cbErr instanceof CircuitBreakerOpenError) {
+      log.warn("CIRCUIT", `${provider} circuit open during retry: ${cbErr.message}`);
+      return {
+        result: {
+          success: false,
+          response: (unavailableResponse as any)(
+            HTTP_STATUS.SERVICE_UNAVAILABLE,
+            `Provider ${provider} circuit breaker is open`,
+            Math.ceil(cbErr.retryAfterMs / 1000)
+          ),
+          status: HTTP_STATUS.SERVICE_UNAVAILABLE,
+        },
+        tlsFingerprintUsed: false,
+      };
+    }
+    throw cbErr;
+  }
+}
+
+/**
+ * Record cost if API key has budget tracking enabled.
+ */
+function recordCostIfNeeded(apiKeyInfo: any, result: any) {
+  if (!apiKeyInfo?.id) return;
+  try {
+    const usage = result.usage || {};
+    const estimatedCost = ((usage.prompt_tokens || 0) + (usage.completion_tokens || 0)) * 0.000001;
+    if (estimatedCost > 0) recordCost(apiKeyInfo.id, estimatedCost);
+  } catch {}
 }
 
 // ──── Extracted helpers (T-28) ────

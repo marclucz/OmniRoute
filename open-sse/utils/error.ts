@@ -1,3 +1,4 @@
+import { getCorsOrigin } from "./cors.ts";
 import { ERROR_TYPES, DEFAULT_ERROR_MESSAGES } from "../config/constants.ts";
 
 /**
@@ -33,7 +34,7 @@ export function errorResponse(statusCode, message) {
     status: statusCode,
     headers: {
       "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Origin": getCorsOrigin(),
     },
   });
 }
@@ -131,7 +132,11 @@ export async function parseUpstreamError(response, provider = null) {
  * @param {number|null} retryAfterMs - Optional retry-after time in milliseconds
  * @returns {{ success: false, status: number, error: string, response: Response, retryAfterMs?: number }}
  */
-export function createErrorResult(statusCode: number, message: string, retryAfterMs: number | null = null) {
+export function createErrorResult(
+  statusCode: number,
+  message: string,
+  retryAfterMs: number | null = null
+) {
   const result: Record<string, any> = {
     success: false,
     status: statusCode,

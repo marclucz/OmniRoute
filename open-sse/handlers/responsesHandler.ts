@@ -1,3 +1,4 @@
+import { getCorsOrigin } from "../utils/cors.ts";
 /**
  * Responses API Handler for Workers
  * Converts Chat Completions to Codex Responses API format
@@ -75,7 +76,7 @@ export async function handleResponsesCore({
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
         Connection: "keep-alive",
-        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Origin": getCorsOrigin(),
       },
     }),
   };

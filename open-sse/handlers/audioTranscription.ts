@@ -1,3 +1,4 @@
+import { getCorsOrigin } from "../utils/cors.ts";
 /**
  * Audio Transcription Handler
  *
@@ -46,7 +47,10 @@ async function handleDeepgramTranscription(providerConfig, file, modelId, token)
     const errText = await res.text();
     return new Response(errText, {
       status: res.status,
-      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": getCorsOrigin(),
+      },
     });
   }
 
@@ -54,7 +58,7 @@ async function handleDeepgramTranscription(providerConfig, file, modelId, token)
   // Transform Deepgram response to OpenAI Whisper format
   const text = data.results?.channels?.[0]?.alternatives?.[0]?.transcript || "";
 
-  return Response.json({ text }, { headers: { "Access-Control-Allow-Origin": "*" } });
+  return Response.json({ text }, { headers: { "Access-Control-Allow-Origin": getCorsOrigin() } });
 }
 
 /**
@@ -78,7 +82,10 @@ async function handleAssemblyAITranscription(providerConfig, file, modelId, toke
     const errText = await uploadRes.text();
     return new Response(errText, {
       status: uploadRes.status,
-      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": getCorsOrigin(),
+      },
     });
   }
 
@@ -102,7 +109,10 @@ async function handleAssemblyAITranscription(providerConfig, file, modelId, toke
     const errText = await submitRes.text();
     return new Response(errText, {
       status: submitRes.status,
-      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": getCorsOrigin(),
+      },
     });
   }
 
@@ -124,7 +134,7 @@ async function handleAssemblyAITranscription(providerConfig, file, modelId, toke
     if (result.status === "completed") {
       return Response.json(
         { text: result.text || "" },
-        { headers: { "Access-Control-Allow-Origin": "*" } }
+        { headers: { "Access-Control-Allow-Origin": getCorsOrigin() } }
       );
     }
 
@@ -182,7 +192,11 @@ export async function handleAudioTranscription({ formData, credentials }) {
 
   // Default: OpenAI/Groq-compatible multipart proxy
   const upstreamForm = new FormData();
-  upstreamForm.append("file", /** @type {Blob} */ (file), /** @type {any} */ (file).name || "audio.wav");
+  upstreamForm.append(
+    "file",
+    /** @type {Blob} */ file,
+    /** @type {any} */ file.name || "audio.wav"
+  );
   upstreamForm.append("model", modelId);
 
   // Forward optional parameters
@@ -195,7 +209,7 @@ export async function handleAudioTranscription({ formData, credentials }) {
   ]) {
     const val = formData.get(key);
     if (val !== null && val !== undefined) {
-      upstreamForm.append(key, /** @type {string} */ (val));
+      upstreamForm.append(key, /** @type {string} */ val);
     }
   }
 
@@ -210,7 +224,10 @@ export async function handleAudioTranscription({ formData, credentials }) {
       const errText = await res.text();
       return new Response(errText, {
         status: res.status,
-        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": getCorsOrigin(),
+        },
       });
     }
 
@@ -219,7 +236,7 @@ export async function handleAudioTranscription({ formData, credentials }) {
 
     return new Response(data, {
       status: 200,
-      headers: { "Content-Type": contentType, "Access-Control-Allow-Origin": "*" },
+      headers: { "Content-Type": contentType, "Access-Control-Allow-Origin": getCorsOrigin() },
     });
   } catch (err) {
     return errorResponse(500, `Transcription request failed: ${err.message}`);

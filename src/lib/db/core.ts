@@ -352,6 +352,25 @@ export function getDbInstance() {
   _db.exec(SCHEMA_SQL);
   ensureProviderConnectionsColumns(_db);
 
+  // ── Versioned Migrations ──
+  // Auto-seed 001 as applied (the inline SCHEMA_SQL already created these tables)
+  // then run any new migrations (002+)
+  try {
+    const { runMigrations } = require("./migrationRunner");
+    _db.exec(`
+      CREATE TABLE IF NOT EXISTS _omniroute_migrations (
+        version TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT OR IGNORE INTO _omniroute_migrations (version, name)
+      VALUES ('001', 'initial_schema');
+    `);
+    runMigrations(_db);
+  } catch (err: any) {
+    console.warn("[DB] Migration runner unavailable:", err.message);
+  }
+
   // Auto-migrate from db.json if exists
   if (JSON_DB_FILE && fs.existsSync(JSON_DB_FILE)) {
     migrateFromJson(_db, JSON_DB_FILE);

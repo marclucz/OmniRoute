@@ -1,10 +1,5 @@
+import { CORS_HEADERS } from "@/shared/utils/cors";
 import { ollamaModels } from "@omniroute/open-sse/config/ollamaModels.ts";
-
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, OPTIONS",
-  "Access-Control-Allow-Headers": "*",
-};
 
 export async function OPTIONS() {
   return new Response(null, { headers: CORS_HEADERS });

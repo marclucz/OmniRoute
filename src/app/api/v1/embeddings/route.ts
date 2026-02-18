@@ -1,3 +1,4 @@
+import { CORS_ORIGIN } from "@/shared/utils/cors";
 import { handleEmbedding } from "@omniroute/open-sse/handlers/embeddings.ts";
 import { getProviderCredentials, extractApiKey, isValidApiKey } from "@/sse/services/auth";
 import {
@@ -15,7 +16,7 @@ import { toJsonErrorPayload } from "@/shared/utils/upstreamError";
 export async function OPTIONS() {
   return new Response(null, {
     headers: {
-      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Origin": CORS_ORIGIN,
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
       "Access-Control-Allow-Headers": "*",
     },

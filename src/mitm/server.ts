@@ -11,6 +11,9 @@ const LOCAL_PORT = 443;
 const ROUTER_URL = "http://localhost:20128/v1/chat/completions";
 const API_KEY = process.env.ROUTER_API_KEY;
 const DB_FILE = path.join(os.homedir(), ".omniroute", "db.json");
+const SQLITE_FILE = path.join(os.homedir(), ".omniroute", "storage.sqlite");
+
+let _sqliteDb = null;
 
 // Toggle logging (set true to enable file logging for debugging)
 const ENABLE_FILE_LOG = false;
@@ -90,14 +93,56 @@ function extractModel(body) {
   }
 }
 
+/**
+ * Get a lazy SQLite connection for reading MITM aliases.
+ * Falls back to null if better-sqlite3 is unavailable.
+ */
+function getSqliteDb() {
+  if (_sqliteDb) return _sqliteDb;
+  try {
+    const Database = require("better-sqlite3");
+    if (fs.existsSync(SQLITE_FILE)) {
+      _sqliteDb = new Database(SQLITE_FILE, { readonly: true });
+      return _sqliteDb;
+    }
+  } catch {
+    // better-sqlite3 not available in this process
+  }
+  return null;
+}
+
 function getMappedModel(model) {
   if (!model) return null;
+
+  // Primary: read from SQLite key_value table
   try {
-    const db = JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
-    return db.mitmAlias?.antigravity?.[model] || null;
+    const db = getSqliteDb();
+    if (db) {
+      const row = db
+        .prepare(
+          "SELECT value FROM key_value WHERE namespace = 'mitmAlias' AND key = 'antigravity'"
+        )
+        .get();
+      if (row) {
+        const mappings = JSON.parse(row.value);
+        return mappings[model] || null;
+      }
+    }
   } catch {
-    return null;
+    // Fall through to JSON fallback
   }
+
+  // Fallback: read from db.json (legacy installs not yet migrated)
+  try {
+    if (fs.existsSync(DB_FILE)) {
+      const db = JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
+      return db.mitmAlias?.antigravity?.[model] || null;
+    }
+  } catch {
+    // Ignore
+  }
+
+  return null;
 }
 
 async function passthrough(req, res, bodyBuffer) {

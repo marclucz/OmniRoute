@@ -1,3 +1,4 @@
+import { getCorsOrigin } from "../utils/cors.ts";
 /**
  * Audio Speech Handler (TTS)
  *
@@ -40,7 +41,10 @@ async function handleHyperbolicSpeech(providerConfig, body, token) {
     const errText = await res.text();
     return new Response(errText, {
       status: res.status,
-      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": getCorsOrigin(),
+      },
     });
   }
 
@@ -52,7 +56,7 @@ async function handleHyperbolicSpeech(providerConfig, body, token) {
     status: 200,
     headers: {
       "Content-Type": "audio/mpeg",
-      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Origin": getCorsOrigin(),
     },
   });
 }
@@ -77,7 +81,10 @@ async function handleDeepgramSpeech(providerConfig, body, modelId, token) {
     const errText = await res.text();
     return new Response(errText, {
       status: res.status,
-      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": getCorsOrigin(),
+      },
     });
   }
 
@@ -86,7 +93,7 @@ async function handleDeepgramSpeech(providerConfig, body, modelId, token) {
     status: 200,
     headers: {
       "Content-Type": contentType,
-      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Origin": getCorsOrigin(),
       "Transfer-Encoding": "chunked",
     },
   });
@@ -154,7 +161,10 @@ export async function handleAudioSpeech({ body, credentials }) {
       const errText = await res.text();
       return new Response(errText, {
         status: res.status,
-        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": getCorsOrigin(),
+        },
       });
     }
 
@@ -164,7 +174,7 @@ export async function handleAudioSpeech({ body, credentials }) {
       status: 200,
       headers: {
         "Content-Type": contentType,
-        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Origin": getCorsOrigin(),
         "Transfer-Encoding": "chunked",
       },
     });

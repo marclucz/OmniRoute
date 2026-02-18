@@ -1,3 +1,4 @@
+import { getCorsOrigin } from "./cors.ts";
 // Transform OpenAI SSE stream to Ollama JSON lines format
 export function transformToOllama(response, model) {
   let buffer = "";
@@ -85,6 +86,9 @@ export function transformToOllama(response, model) {
   });
 
   return new Response(response.body.pipeThrough(transform), {
-    headers: { "Content-Type": "application/x-ndjson", "Access-Control-Allow-Origin": "*" },
+    headers: {
+      "Content-Type": "application/x-ndjson",
+      "Access-Control-Allow-Origin": getCorsOrigin(),
+    },
   });
 }
